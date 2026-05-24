@@ -1,3 +1,5 @@
+import { SIGN_METADATA_BY_TOKEN } from './data/vsl/manifest.js'
+
 const LETTERS = [
   ['A', 'chu_a', 'a'],
   ['Ă', 'chu_aw', 'ăằắẳẵặ'],
@@ -256,6 +258,7 @@ export function createSeedDictionary(controlBones, sourceModel, faceControls = [
     token,
     label,
     kind: 'letter',
+    metadata: SIGN_METADATA_BY_TOKEN.get(token) || null,
     pose: makePose(
       token,
       label,
@@ -273,6 +276,7 @@ export function createSeedDictionary(controlBones, sourceModel, faceControls = [
       token,
       label,
       kind: 'digit',
+      metadata: SIGN_METADATA_BY_TOKEN.get(token) || null,
       pose: makePose(
         token,
         label,
@@ -291,6 +295,7 @@ export function createSeedDictionary(controlBones, sourceModel, faceControls = [
       token: phrase.token,
       label: phrase.label,
       kind: 'phrase',
+      metadata: SIGN_METADATA_BY_TOKEN.get(phrase.token) || null,
       pose: makePose(
         phrase.token,
         phrase.label,
@@ -319,6 +324,12 @@ export function createPoseDictionary(seedEntries, savedPoses) {
       token: pose.name,
       label: pose.name,
       kind: 'local',
+      metadata: {
+        token: pose.name,
+        label: pose.name,
+        type: 'local',
+        authoringStatus: 'local_author',
+      },
       pose,
     })
   }

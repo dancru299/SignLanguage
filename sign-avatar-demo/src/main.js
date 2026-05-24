@@ -40,6 +40,10 @@ import {
   tokenizeTextToSigns,
 } from './signDictionary.js'
 import {
+  isFirstPracticeToken,
+  MVP_SCOPE,
+} from './data/vsl/manifest.js'
+import {
   applyFaceValues,
   cloneFaceValues,
   collectFaceControls,
@@ -66,8 +70,103 @@ const REFERENCE_AVATAR = {
   name: 'OSA Polydancer',
 }
 
+const HAND_SIDES = ['left', 'right']
+const FINGER_KEYS = ['thumb', 'index', 'middle', 'ring', 'pinky']
+const FINGER_LABELS = {
+  thumb: 'Thumb',
+  index: 'Index',
+  middle: 'Middle',
+  ring: 'Ring',
+  pinky: 'Pinky',
+}
+const FINGER_JOINT_LABELS = ['Base', 'Middle', 'Tip']
+const FINGER_CURL_WEIGHTS = [1, 0.78, 0.56]
+
+const HAND_SHAPE_PRESETS = {
+  open: {
+    label: 'Open',
+    fingers: {
+      thumb: { joints: [0, 0, 0], spread: 12, twist: 0 },
+      index: { joints: [0, 0, 0], spread: 3, twist: 0 },
+      middle: { joints: [0, 0, 0], spread: 0, twist: 0 },
+      ring: { joints: [0, 0, 0], spread: -3, twist: 0 },
+      pinky: { joints: [0, 0, 0], spread: -8, twist: 0 },
+    },
+  },
+  relaxed: {
+    label: 'Relax',
+    fingers: {
+      thumb: { joints: [18, 12, 8], spread: 12, twist: 4 },
+      index: { joints: [12, 9, 6], spread: 3, twist: 0 },
+      middle: { joints: [16, 12, 8], spread: 0, twist: 0 },
+      ring: { joints: [22, 16, 10], spread: -3, twist: 0 },
+      pinky: { joints: [28, 20, 12], spread: -7, twist: 0 },
+    },
+  },
+  fist: {
+    label: 'Fist',
+    fingers: {
+      thumb: { joints: [46, 54, 24], spread: 9, twist: 22 },
+      index: { joints: [76, 96, 74], spread: 1, twist: 0 },
+      middle: { joints: [80, 100, 78], spread: 0, twist: 0 },
+      ring: { joints: [82, 98, 76], spread: -1, twist: 0 },
+      pinky: { joints: [80, 94, 72], spread: -2, twist: 0 },
+    },
+  },
+  point: {
+    label: 'Point',
+    fingers: {
+      thumb: { joints: [26, 22, 10], spread: 14, twist: 8 },
+      index: { joints: [0, 0, 0], spread: 2, twist: 0 },
+      middle: { joints: [72, 94, 70], spread: 0, twist: 0 },
+      ring: { joints: [78, 96, 72], spread: -2, twist: 0 },
+      pinky: { joints: [78, 92, 70], spread: -4, twist: 0 },
+    },
+  },
+  pinch: {
+    label: 'Pinch',
+    fingers: {
+      thumb: { joints: [42, 46, 22], spread: 18, twist: 18 },
+      index: { joints: [32, 48, 38], spread: 4, twist: 0 },
+      middle: { joints: [66, 86, 62], spread: 0, twist: 0 },
+      ring: { joints: [72, 90, 66], spread: -2, twist: 0 },
+      pinky: { joints: [76, 90, 66], spread: -4, twist: 0 },
+    },
+  },
+  c_shape: {
+    label: 'C-shape',
+    fingers: {
+      thumb: { joints: [28, 30, 14], spread: 20, twist: 10 },
+      index: { joints: [24, 42, 28], spread: 7, twist: 0 },
+      middle: { joints: [28, 44, 30], spread: 2, twist: 0 },
+      ring: { joints: [30, 46, 32], spread: -3, twist: 0 },
+      pinky: { joints: [32, 48, 34], spread: -7, twist: 0 },
+    },
+  },
+  scissor: {
+    label: 'Scissor',
+    fingers: {
+      thumb: { joints: [34, 42, 18], spread: 12, twist: 16 },
+      index: { joints: [0, 0, 0], spread: 14, twist: 0 },
+      middle: { joints: [0, 0, 0], spread: -10, twist: 0 },
+      ring: { joints: [78, 96, 72], spread: -8, twist: 0 },
+      pinky: { joints: [78, 92, 70], spread: -12, twist: 0 },
+    },
+  },
+  like: {
+    label: 'Like',
+    fingers: {
+      thumb: { joints: [-10, -4, 0], spread: 34, twist: -18 },
+      index: { joints: [76, 96, 74], spread: 1, twist: 0 },
+      middle: { joints: [80, 100, 78], spread: 0, twist: 0 },
+      ring: { joints: [82, 98, 76], spread: -1, twist: 0 },
+      pinky: { joints: [80, 94, 72], spread: -2, twist: 0 },
+    },
+  },
+}
+
 const state = {
-  mode: 'lab',
+  mode: 'learner',
   model: null,
   vrm: null,
   helper: null,
@@ -87,7 +186,9 @@ const state = {
   usedFallback: false,
   poseOffsets: new Map(),
   wristTargets: new Map(),
-  activeIkSide: 'left',
+  activeIkSide: 'right',
+  activeHandSide: 'right',
+  activeFinger: 'index',
   savedPoses: [],
   seedEntries: [],
   signDictionary: new Map(),
@@ -126,10 +227,10 @@ const state = {
 }
 
 document.querySelector('#app').innerHTML = `
-  <main class="app-shell lab-mode" id="appShell">
+  <main class="app-shell learner-mode" id="appShell">
     <nav class="mode-tabs" aria-label="Workspace mode">
-      <button id="learnerModeButton" type="button">Learner</button>
-      <button id="labModeButton" type="button" class="is-active">Pose Lab</button>
+      <button id="learnerModeButton" type="button" class="is-active">Learner</button>
+      <button id="labModeButton" type="button">Pose Lab</button>
     </nav>
 
     <aside class="panel" aria-label="Bone controls">
@@ -245,10 +346,106 @@ document.querySelector('#app').innerHTML = `
         </div>
       </section>
 
-      <section class="ik-lab" aria-label="Wrist inverse kinematics">
+      <section class="hand-lab" aria-label="Finger shape controls">
         <div class="section-title">
-          <h2>Wrist IK</h2>
-          <span>Natural arm</span>
+          <h2>Hand shape</h2>
+          <span>Fingers</span>
+        </div>
+
+        <div class="split-row">
+          <div class="control-row">
+            <label class="field-label" for="handSideSelect">Hand</label>
+            <select id="handSideSelect">
+              <option value="left">Left hand</option>
+              <option value="right">Right hand</option>
+            </select>
+          </div>
+
+          <div class="control-row">
+            <label class="field-label" for="fingerSelect">Finger</label>
+            <select id="fingerSelect">
+              <option value="thumb">Thumb</option>
+              <option value="index">Index</option>
+              <option value="middle">Middle</option>
+              <option value="ring">Ring</option>
+              <option value="pinky">Pinky</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="fingerCurlRange">Curl</label>
+            <output id="fingerCurlValue" for="fingerCurlRange">0 deg</output>
+          </div>
+          <input id="fingerCurlRange" type="range" min="-20" max="110" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="fingerSpreadRange">Spread</label>
+            <output id="fingerSpreadValue" for="fingerSpreadRange">0 deg</output>
+          </div>
+          <input id="fingerSpreadRange" type="range" min="-45" max="45" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="fingerTwistRange">Twist</label>
+            <output id="fingerTwistValue" for="fingerTwistRange">0 deg</output>
+          </div>
+          <input id="fingerTwistRange" type="range" min="-60" max="60" step="1" value="0" />
+        </div>
+
+        <div class="subsection-label">Finger joints</div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="fingerBaseRange">Base joint</label>
+            <output id="fingerBaseValue" for="fingerBaseRange">0 deg</output>
+          </div>
+          <input id="fingerBaseRange" type="range" min="-30" max="125" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="fingerMiddleRange">Middle joint</label>
+            <output id="fingerMiddleValue" for="fingerMiddleRange">0 deg</output>
+          </div>
+          <input id="fingerMiddleRange" type="range" min="-30" max="125" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="fingerTipRange">Tip joint</label>
+            <output id="fingerTipValue" for="fingerTipRange">0 deg</output>
+          </div>
+          <input id="fingerTipRange" type="range" min="-30" max="125" step="1" value="0" />
+        </div>
+
+        <div class="preset-grid" aria-label="Hand shape presets">
+          <button type="button" data-hand-preset="open">Open</button>
+          <button type="button" data-hand-preset="relaxed">Relax</button>
+          <button type="button" data-hand-preset="fist">Fist</button>
+          <button type="button" data-hand-preset="point">Point</button>
+          <button type="button" data-hand-preset="pinch">Pinch</button>
+          <button type="button" data-hand-preset="c_shape">C-shape</button>
+          <button type="button" data-hand-preset="scissor">Scissor</button>
+          <button type="button" data-hand-preset="like">Like</button>
+        </div>
+
+        <div class="button-pair">
+          <button id="resetFingerButton" type="button">Reset finger</button>
+          <button id="resetHandButton" type="button">Reset hand</button>
+        </div>
+
+        <div class="queue-status" id="handShapeStatus">Hand controls wait for a model</div>
+      </section>
+
+      <section class="ik-lab" aria-label="Arm and wrist inverse kinematics">
+        <div class="section-title">
+          <h2>Arm / wrist IK</h2>
+          <span>Elbow + wrist</span>
         </div>
 
         <div class="control-row">
@@ -283,8 +480,60 @@ document.querySelector('#app').innerHTML = `
           <input id="ikZRange" type="range" min="-0.6" max="1.2" step="0.01" value="0" />
         </div>
 
+        <div class="subsection-label">Elbow pole</div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="ikPoleXRange">Pole X</label>
+            <output id="ikPoleXValue" for="ikPoleXRange">0.00</output>
+          </div>
+          <input id="ikPoleXRange" type="range" min="-1.4" max="1.4" step="0.01" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="ikPoleYRange">Pole Y</label>
+            <output id="ikPoleYValue" for="ikPoleYRange">0.00</output>
+          </div>
+          <input id="ikPoleYRange" type="range" min="-0.8" max="1.8" step="0.01" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="ikPoleZRange">Pole Z</label>
+            <output id="ikPoleZValue" for="ikPoleZRange">0.00</output>
+          </div>
+          <input id="ikPoleZRange" type="range" min="-1" max="1.5" step="0.01" value="0" />
+        </div>
+
+        <div class="subsection-label">Wrist rotation</div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="wristPitchRange">Pitch X</label>
+            <output id="wristPitchValue" for="wristPitchRange">0 deg</output>
+          </div>
+          <input id="wristPitchRange" type="range" min="-110" max="110" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="wristYawRange">Yaw Y</label>
+            <output id="wristYawValue" for="wristYawRange">0 deg</output>
+          </div>
+          <input id="wristYawRange" type="range" min="-110" max="110" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="range-head">
+            <label class="field-label" for="wristRollRange">Roll Z</label>
+            <output id="wristRollValue" for="wristRollRange">0 deg</output>
+          </div>
+          <input id="wristRollRange" type="range" min="-110" max="110" step="1" value="0" />
+        </div>
+
         <div class="button-pair">
-          <button id="captureWristButton" type="button">Capture wrist</button>
+          <button id="captureWristButton" type="button">Capture arm</button>
           <button id="clearWristButton" type="button">Clear IK</button>
         </div>
 
@@ -379,6 +628,7 @@ document.querySelector('#app').innerHTML = `
         <div class="learner-metrics">
           <span id="learnerScoreText">0%</span>
           <span id="learnerHandText">No hand</span>
+          <span id="learnerDatasetText">MVP batch 5 signs</span>
           <span id="learnerPerfText">Render -- fps / AI -- fps</span>
         </div>
       </section>
@@ -433,6 +683,24 @@ const els = {
   deletePoseButton: document.querySelector('#deletePoseButton'),
   transitionRange: document.querySelector('#transitionRange'),
   transitionValue: document.querySelector('#transitionValue'),
+  handSideSelect: document.querySelector('#handSideSelect'),
+  fingerSelect: document.querySelector('#fingerSelect'),
+  fingerCurlRange: document.querySelector('#fingerCurlRange'),
+  fingerCurlValue: document.querySelector('#fingerCurlValue'),
+  fingerSpreadRange: document.querySelector('#fingerSpreadRange'),
+  fingerSpreadValue: document.querySelector('#fingerSpreadValue'),
+  fingerTwistRange: document.querySelector('#fingerTwistRange'),
+  fingerTwistValue: document.querySelector('#fingerTwistValue'),
+  fingerBaseRange: document.querySelector('#fingerBaseRange'),
+  fingerBaseValue: document.querySelector('#fingerBaseValue'),
+  fingerMiddleRange: document.querySelector('#fingerMiddleRange'),
+  fingerMiddleValue: document.querySelector('#fingerMiddleValue'),
+  fingerTipRange: document.querySelector('#fingerTipRange'),
+  fingerTipValue: document.querySelector('#fingerTipValue'),
+  handPresetButtons: document.querySelectorAll('[data-hand-preset]'),
+  resetFingerButton: document.querySelector('#resetFingerButton'),
+  resetHandButton: document.querySelector('#resetHandButton'),
+  handShapeStatus: document.querySelector('#handShapeStatus'),
   ikSideSelect: document.querySelector('#ikSideSelect'),
   ikXRange: document.querySelector('#ikXRange'),
   ikXValue: document.querySelector('#ikXValue'),
@@ -440,6 +708,18 @@ const els = {
   ikYValue: document.querySelector('#ikYValue'),
   ikZRange: document.querySelector('#ikZRange'),
   ikZValue: document.querySelector('#ikZValue'),
+  ikPoleXRange: document.querySelector('#ikPoleXRange'),
+  ikPoleXValue: document.querySelector('#ikPoleXValue'),
+  ikPoleYRange: document.querySelector('#ikPoleYRange'),
+  ikPoleYValue: document.querySelector('#ikPoleYValue'),
+  ikPoleZRange: document.querySelector('#ikPoleZRange'),
+  ikPoleZValue: document.querySelector('#ikPoleZValue'),
+  wristPitchRange: document.querySelector('#wristPitchRange'),
+  wristPitchValue: document.querySelector('#wristPitchValue'),
+  wristYawRange: document.querySelector('#wristYawRange'),
+  wristYawValue: document.querySelector('#wristYawValue'),
+  wristRollRange: document.querySelector('#wristRollRange'),
+  wristRollValue: document.querySelector('#wristRollValue'),
   captureWristButton: document.querySelector('#captureWristButton'),
   clearWristButton: document.querySelector('#clearWristButton'),
   ikStatus: document.querySelector('#ikStatus'),
@@ -460,6 +740,7 @@ const els = {
   learnerScoreFill: document.querySelector('#learnerScoreFill'),
   learnerScoreText: document.querySelector('#learnerScoreText'),
   learnerHandText: document.querySelector('#learnerHandText'),
+  learnerDatasetText: document.querySelector('#learnerDatasetText'),
   learnerPerfText: document.querySelector('#learnerPerfText'),
   startPracticeButton: document.querySelector('#startPracticeButton'),
   stopPracticeButton: document.querySelector('#stopPracticeButton'),
@@ -557,6 +838,7 @@ function updateStatus() {
     state.vrm ? `vrmMappedControls: ${state.model?.userData?.vrmMappedControlCount || 0}` : 'vrmMappedControls: n/a',
     state.vrm ? `restPose: ${state.model?.userData?.signingReadyPose || 'vrm-default'}` : 'restPose: model default',
     `wristIK: ${state.wristTargets.size} target(s)`,
+    `handShape: ${state.activeHandSide} ${state.activeFinger}`,
     `activeBone: ${activeName}`,
     `rotate axis: ${state.axis.toUpperCase()}`,
     state.usedFallback ? 'fallback: showing every bone' : 'fallback: no',
@@ -593,6 +875,11 @@ function updatePerformanceText() {
   els.learnerPerfText.textContent = text
 }
 
+function updateDatasetText() {
+  els.learnerDatasetText.textContent =
+    `${MVP_SCOPE.datasetVersion} - ${MVP_SCOPE.firstPracticeBatch.length}/${MVP_SCOPE.officialTargetCount} signs`
+}
+
 function setMode(mode) {
   state.mode = mode
   els.appShell.classList.toggle('learner-mode', mode === 'learner')
@@ -606,6 +893,7 @@ function setActiveBoneByName(name) {
   state.activeBone = state.controlBones.find((bone) => bone.name === name) || null
   if (state.activeBone) {
     setAxis(preferredAxisForBone(state.activeBone))
+    syncHandControlsFromActiveBone()
   }
   els.activeBoneName.textContent = state.activeBone?.name || 'none'
   updateRotationControlsFromActiveBone()
@@ -673,6 +961,312 @@ function updateTransitionValue(ms) {
   els.transitionValue.textContent = `${state.transitionMs} ms`
 }
 
+function setDegreeOutput(output, degrees) {
+  const rounded = Math.round(Number(degrees) || 0)
+  output.value = `${rounded} deg`
+  output.textContent = `${rounded} deg`
+}
+
+function setDegreeRange(range, output, degrees) {
+  const rounded = Math.round(Number(degrees) || 0)
+  range.value = String(rounded)
+  setDegreeOutput(output, rounded)
+}
+
+function getRangeDegrees(range) {
+  return Number(range.value) || 0
+}
+
+function updateHandShapeRangeLabels() {
+  setDegreeOutput(els.fingerCurlValue, getRangeDegrees(els.fingerCurlRange))
+  setDegreeOutput(els.fingerSpreadValue, getRangeDegrees(els.fingerSpreadRange))
+  setDegreeOutput(els.fingerTwistValue, getRangeDegrees(els.fingerTwistRange))
+}
+
+function updateFingerJointRangeLabels() {
+  setDegreeOutput(els.fingerBaseValue, getRangeDegrees(els.fingerBaseRange))
+  setDegreeOutput(els.fingerMiddleValue, getRangeDegrees(els.fingerMiddleRange))
+  setDegreeOutput(els.fingerTipValue, getRangeDegrees(els.fingerTipRange))
+}
+
+function hasTwoSidedControls() {
+  return HAND_SIDES.every((side) =>
+    state.controlBones.some((bone) => bone.name.toLowerCase().includes(side)),
+  )
+}
+
+function isFingerControlName(lowerName) {
+  return FINGER_KEYS.some((finger) => lowerName.includes(finger)) ||
+    lowerName.includes('little') ||
+    lowerName.includes('finger') ||
+    lowerName.includes('digit')
+}
+
+function isBoneOnSide(bone, side) {
+  const lower = bone.name.toLowerCase()
+
+  if (lower.includes('left') || lower.includes('right')) {
+    return lower.includes(side)
+  }
+
+  return !hasTwoSidedControls()
+}
+
+function matchesFinger(bone, finger) {
+  if (bone.userData?.finger === finger) return true
+
+  const lower = bone.name.toLowerCase()
+
+  if (finger === 'pinky') {
+    return lower.includes('pinky') || lower.includes('little')
+  }
+
+  return lower.includes(finger)
+}
+
+function fingerSegmentRank(bone) {
+  const segment = Number(bone.userData?.segment)
+  if (Number.isFinite(segment) && segment > 0) return segment
+
+  const lower = bone.name.toLowerCase()
+  const numericParts = lower.match(/\d+/g)
+  if (numericParts?.length) {
+    return Number(numericParts[numericParts.length - 1])
+  }
+
+  if (lower.includes('metacarpal') || lower.includes('proximal')) return 1
+  if (lower.includes('intermediate')) return 2
+  if (lower.includes('distal')) return 3
+
+  return 99
+}
+
+function findFingerControlBones(side, finger) {
+  return state.controlBones
+    .filter((bone) => {
+      const lower = bone.name.toLowerCase()
+      const isFinger = bone.userData?.signPart === 'fingers' || isFingerControlName(lower)
+      return isFinger && isBoneOnSide(bone, side) && matchesFinger(bone, finger)
+    })
+    .sort((a, b) => fingerSegmentRank(a) - fingerSegmentRank(b) || a.name.localeCompare(b.name))
+}
+
+function findHandBone(side) {
+  return state.controlBones.find((bone) =>
+    bone.userData?.signPart === 'hands' && isBoneOnSide(bone, side),
+  ) || state.controlBones.find((bone) => {
+    const lower = bone.name.toLowerCase()
+    return lower.includes('hand') && !isFingerControlName(lower) && isBoneOnSide(bone, side)
+  }) || null
+}
+
+function inferSideFromBone(bone) {
+  const lower = bone?.name?.toLowerCase() || ''
+
+  if (lower.includes('left')) return 'left'
+  if (lower.includes('right')) return 'right'
+
+  return state.activeHandSide
+}
+
+function inferFingerFromBone(bone) {
+  return FINGER_KEYS.find((finger) => matchesFinger(bone, finger)) || state.activeFinger
+}
+
+function syncHandControlsFromActiveBone() {
+  if (!state.activeBone) return
+
+  const part = state.activeBone.userData?.signPart
+  if (part !== 'fingers' && part !== 'hands' && !isFingerControlName(state.activeBone.name.toLowerCase())) {
+    return
+  }
+
+  const side = inferSideFromBone(state.activeBone)
+  state.activeHandSide = side
+  state.activeIkSide = side
+
+  if (part === 'fingers' || isFingerControlName(state.activeBone.name.toLowerCase())) {
+    state.activeFinger = inferFingerFromBone(state.activeBone)
+  }
+
+  refreshHandShapeControls()
+  refreshIkControls()
+}
+
+function setHandStatus(text) {
+  els.handShapeStatus.textContent = text
+}
+
+function readFingerShape(side, finger) {
+  const bones = findFingerControlBones(side, finger)
+
+  if (bones.length === 0) {
+    return { curl: 0, spread: 0, twist: 0, joints: [0, 0, 0], count: 0 }
+  }
+
+  const joints = FINGER_JOINT_LABELS.map((_, index) =>
+    THREE.MathUtils.radToDeg(getBoneOffset(state.poseOffsets, bones[index]?.name).x || 0),
+  )
+  const curlSamples = joints.map((value, index) => {
+    const weight = FINGER_CURL_WEIGHTS[index] || FINGER_CURL_WEIGHTS[FINGER_CURL_WEIGHTS.length - 1]
+    return value / weight
+  })
+  const averageCurl = curlSamples.reduce((total, value) => total + value, 0) / curlSamples.length
+  const baseOffset = getBoneOffset(state.poseOffsets, bones[0].name)
+
+  return {
+    curl: averageCurl,
+    spread: THREE.MathUtils.radToDeg(baseOffset.z || 0),
+    twist: THREE.MathUtils.radToDeg(baseOffset.y || 0),
+    joints,
+    count: bones.length,
+  }
+}
+
+function shapeJointValue(values, index) {
+  if (Array.isArray(values.joints)) {
+    return Number(values.joints[index]) || 0
+  }
+
+  const curl = Number(values.curl) || 0
+  const weight = FINGER_CURL_WEIGHTS[index] || FINGER_CURL_WEIGHTS[FINGER_CURL_WEIGHTS.length - 1]
+  return curl * weight
+}
+
+function setFingerShape(side, finger, values) {
+  const bones = findFingerControlBones(side, finger)
+  const spread = THREE.MathUtils.degToRad(values.spread || 0)
+  const twist = THREE.MathUtils.degToRad(values.twist || 0)
+
+  bones.forEach((bone, index) => {
+    setBoneAxisOffset(state.poseOffsets, bone.name, 'x', THREE.MathUtils.degToRad(shapeJointValue(values, index)))
+
+    if (index === 0) {
+      setBoneAxisOffset(state.poseOffsets, bone.name, 'z', spread)
+      setBoneAxisOffset(state.poseOffsets, bone.name, 'y', twist)
+    }
+  })
+
+  return bones.length
+}
+
+function clearBoneOffsets(bone) {
+  if (!bone) return
+
+  setBoneAxisOffset(state.poseOffsets, bone.name, 'x', 0)
+  setBoneAxisOffset(state.poseOffsets, bone.name, 'y', 0)
+  setBoneAxisOffset(state.poseOffsets, bone.name, 'z', 0)
+}
+
+function refreshHandShapeControls() {
+  els.handSideSelect.value = state.activeHandSide
+  els.fingerSelect.value = state.activeFinger
+
+  const shape = readFingerShape(state.activeHandSide, state.activeFinger)
+  setDegreeRange(els.fingerCurlRange, els.fingerCurlValue, shape.curl)
+  setDegreeRange(els.fingerSpreadRange, els.fingerSpreadValue, shape.spread)
+  setDegreeRange(els.fingerTwistRange, els.fingerTwistValue, shape.twist)
+  setDegreeRange(els.fingerBaseRange, els.fingerBaseValue, shape.joints[0])
+  setDegreeRange(els.fingerMiddleRange, els.fingerMiddleValue, shape.joints[1])
+  setDegreeRange(els.fingerTipRange, els.fingerTipValue, shape.joints[2])
+
+  if (shape.count === 0) {
+    setHandStatus(`${state.activeHandSide} ${FINGER_LABELS[state.activeFinger]} not found`)
+    return
+  }
+
+  setHandStatus(`${state.activeHandSide} ${FINGER_LABELS[state.activeFinger]}: ${shape.count} segment(s)`)
+}
+
+function selectPrimaryFingerBone() {
+  const [bone] = findFingerControlBones(state.activeHandSide, state.activeFinger)
+  if (!bone) return
+
+  state.activeBone = bone
+  els.controlScope.value = 'fingers'
+  setAxis(preferredAxisForBone(bone))
+  fillBoneSelect()
+  updateStatus()
+}
+
+function applyFingerShapeFromControls() {
+  const count = setFingerShape(state.activeHandSide, state.activeFinger, {
+    curl: getRangeDegrees(els.fingerCurlRange),
+    spread: getRangeDegrees(els.fingerSpreadRange),
+    twist: getRangeDegrees(els.fingerTwistRange),
+  })
+
+  state.transition = null
+  updateHandShapeRangeLabels()
+  refreshHandShapeControls()
+  applyPoseOffsets()
+  setHandStatus(`${state.activeHandSide} ${FINGER_LABELS[state.activeFinger]}: ${count} segment(s)`)
+}
+
+function applyFingerJointFromControls() {
+  const count = setFingerShape(state.activeHandSide, state.activeFinger, {
+    joints: [
+      getRangeDegrees(els.fingerBaseRange),
+      getRangeDegrees(els.fingerMiddleRange),
+      getRangeDegrees(els.fingerTipRange),
+    ],
+    spread: getRangeDegrees(els.fingerSpreadRange),
+    twist: getRangeDegrees(els.fingerTwistRange),
+  })
+
+  state.transition = null
+  updateFingerJointRangeLabels()
+  refreshHandShapeControls()
+  applyPoseOffsets()
+  setHandStatus(`${state.activeHandSide} ${FINGER_LABELS[state.activeFinger]} joints: ${count} segment(s)`)
+}
+
+function resetFingerShape() {
+  setFingerShape(state.activeHandSide, state.activeFinger, {
+    joints: [0, 0, 0],
+    spread: 0,
+    twist: 0,
+  })
+  state.transition = null
+  applyPoseOffsets()
+  refreshHandShapeControls()
+}
+
+function resetHandShape(side = state.activeHandSide) {
+  FINGER_KEYS.forEach((finger) => {
+    setFingerShape(side, finger, {
+      joints: [0, 0, 0],
+      spread: 0,
+      twist: 0,
+    })
+  })
+  clearBoneOffsets(findHandBone(side))
+  state.transition = null
+  applyPoseOffsets()
+  refreshHandShapeControls()
+  refreshWristRotationControls(side)
+}
+
+function applyHandPreset(presetKey) {
+  const preset = HAND_SHAPE_PRESETS[presetKey]
+  if (!preset) return
+
+  let segmentCount = 0
+
+  FINGER_KEYS.forEach((finger) => {
+    segmentCount += setFingerShape(
+      state.activeHandSide,
+      finger,
+      preset.fingers[finger] || { curl: 0, spread: 0, twist: 0 },
+    )
+  })
+
+  state.transition = null
+  applyPoseOffsets()
+  refreshHandShapeControls()
+  setHandStatus(`${state.activeHandSide} ${preset.label}: ${segmentCount} segment(s)`)
+}
+
 function setIkStatus(text) {
   els.ikStatus.textContent = text
 }
@@ -688,19 +1282,55 @@ function setIkRange(axis, value) {
   setIkOutput(axis, value)
 }
 
+function setIkPoleOutput(axis, value) {
+  const formatted = Number(value || 0).toFixed(2)
+  els[`ikPole${axis}Value`].value = formatted
+  els[`ikPole${axis}Value`].textContent = formatted
+}
+
+function setIkPoleRange(axis, value) {
+  els[`ikPole${axis}Range`].value = String(Number(value || 0).toFixed(2))
+  setIkPoleOutput(axis, value)
+}
+
+function setWristRotationRange(axis, radians) {
+  const degrees = THREE.MathUtils.radToDeg(radians || 0)
+
+  if (axis === 'x') {
+    setDegreeRange(els.wristPitchRange, els.wristPitchValue, degrees)
+  } else if (axis === 'y') {
+    setDegreeRange(els.wristYawRange, els.wristYawValue, degrees)
+  } else if (axis === 'z') {
+    setDegreeRange(els.wristRollRange, els.wristRollValue, degrees)
+  }
+}
+
 function previewWristTarget(side = state.activeIkSide) {
   return state.wristTargets.get(side) || captureWristTarget(state.model, state.controlBones, side)
+}
+
+function refreshWristRotationControls(side = state.activeIkSide) {
+  const hand = findHandBone(side)
+  const offset = hand ? getBoneOffset(state.poseOffsets, hand.name) : {}
+
+  setWristRotationRange('x', offset.x || 0)
+  setWristRotationRange('y', offset.y || 0)
+  setWristRotationRange('z', offset.z || 0)
 }
 
 function refreshIkControls() {
   const side = state.activeIkSide
   const target = previewWristTarget(side)
   els.ikSideSelect.value = side
+  refreshWristRotationControls(side)
 
   if (!target?.position) {
     setIkRange('X', 0)
     setIkRange('Y', 0)
     setIkRange('Z', 0)
+    setIkPoleRange('X', 0)
+    setIkPoleRange('Y', 0)
+    setIkPoleRange('Z', 0)
     setIkStatus('No wrist chain found')
     return
   }
@@ -708,6 +1338,9 @@ function refreshIkControls() {
   setIkRange('X', target.position.x)
   setIkRange('Y', target.position.y)
   setIkRange('Z', target.position.z)
+  setIkPoleRange('X', target.pole?.x || 0)
+  setIkPoleRange('Y', target.pole?.y || 0)
+  setIkPoleRange('Z', target.pole?.z || 0)
   setIkStatus(state.wristTargets.has(side) ? `${side} wrist IK active` : `${side} wrist preview`)
 }
 
@@ -715,6 +1348,15 @@ function updateIkRangeLabels() {
   setIkOutput('X', els.ikXRange.value)
   setIkOutput('Y', els.ikYRange.value)
   setIkOutput('Z', els.ikZRange.value)
+  setIkPoleOutput('X', els.ikPoleXRange.value)
+  setIkPoleOutput('Y', els.ikPoleYRange.value)
+  setIkPoleOutput('Z', els.ikPoleZRange.value)
+}
+
+function updateWristRotationLabels() {
+  setDegreeOutput(els.wristPitchValue, getRangeDegrees(els.wristPitchRange))
+  setDegreeOutput(els.wristYawValue, getRangeDegrees(els.wristYawRange))
+  setDegreeOutput(els.wristRollValue, getRangeDegrees(els.wristRollRange))
 }
 
 function applyIkTargetFromControls() {
@@ -727,11 +1369,32 @@ function applyIkTargetFromControls() {
   target.position.x = Number(els.ikXRange.value)
   target.position.y = Number(els.ikYRange.value)
   target.position.z = Number(els.ikZRange.value)
+  target.pole.x = Number(els.ikPoleXRange.value)
+  target.pole.y = Number(els.ikPoleYRange.value)
+  target.pole.z = Number(els.ikPoleZRange.value)
   state.wristTargets.set(side, target)
   state.transition = null
   updateIkRangeLabels()
   applyPoseOffsets()
   setIkStatus(`${side} wrist IK active`)
+}
+
+function applyWristRotationFromControls() {
+  const side = state.activeIkSide
+  const hand = findHandBone(side)
+
+  if (!hand) {
+    setIkStatus(`${side} wrist bone not found`)
+    return
+  }
+
+  setBoneAxisOffset(state.poseOffsets, hand.name, 'x', THREE.MathUtils.degToRad(getRangeDegrees(els.wristPitchRange)))
+  setBoneAxisOffset(state.poseOffsets, hand.name, 'y', THREE.MathUtils.degToRad(getRangeDegrees(els.wristYawRange)))
+  setBoneAxisOffset(state.poseOffsets, hand.name, 'z', THREE.MathUtils.degToRad(getRangeDegrees(els.wristRollRange)))
+  state.transition = null
+  updateWristRotationLabels()
+  applyPoseOffsets()
+  setIkStatus(`${side} wrist rotation active`)
 }
 
 function refreshSavedPoseSelect(selectedName = '') {
@@ -763,7 +1426,7 @@ function refreshSignDictionary() {
   state.signDictionary = createPoseDictionary(state.seedEntries, state.savedPoses)
 
   if (els.queueStatus) {
-    setQueueStatus(`${state.signDictionary.size} signs ready`)
+    setQueueStatus(`${state.signDictionary.size} signs ready - MVP batch ${MVP_SCOPE.firstPracticeBatch.length}`)
   }
 }
 
@@ -879,12 +1542,13 @@ function inspectModel(model, sourceName, options = {}) {
   state.transition = null
   stopPlayback()
   state.seedEntries = createSeedDictionary(state.controlBones, sourceName, state.faceControls)
-  state.activeBone = state.controlBones.find((bone) => /left.*index.*0?1/i.test(bone.name)) ||
-    state.controlBones.find((bone) => /lefthandindex1/i.test(bone.name)) ||
+  state.activeBone = state.controlBones.find((bone) => new RegExp(`${state.activeHandSide}.*index.*0?1`, 'i').test(bone.name)) ||
+    state.controlBones.find((bone) => new RegExp(`${state.activeHandSide}handindex1`, 'i').test(bone.name)) ||
     state.controlBones.find((bone) => /index/i.test(bone.name)) ||
     state.controlBones[0] ||
     null
   setAxis(preferredAxisForBone(state.activeBone))
+  syncHandControlsFromActiveBone()
 
   fillBoneSelect()
   fillFaceSelect()
@@ -893,6 +1557,7 @@ function inspectModel(model, sourceName, options = {}) {
   applyPoseOffsets()
   focusCameraOnActiveBone()
   refreshIkControls()
+  refreshHandShapeControls()
 }
 
 async function loadDemoHandModel() {
@@ -1059,6 +1724,7 @@ function transitionToPoseState(
     state.wristTargets = cloneWristTargets(targetWristTargets)
     applyPoseOffsets()
     refreshIkControls()
+    refreshHandShapeControls()
     return
   }
 
@@ -1138,6 +1804,7 @@ function updateTransition(time) {
     updateRotationControlsFromActiveBone()
     updateFaceControlsFromActive()
     refreshIkControls()
+    refreshHandShapeControls()
     updateStatus()
   }
 
@@ -1291,7 +1958,9 @@ function fillPracticeLessons() {
   els.lessonSelect.innerHTML = ''
   els.learnerLessonSelect.innerHTML = ''
 
-  for (const lesson of PRACTICE_LESSONS) {
+  const lessons = PRACTICE_LESSONS.filter((lesson) => isFirstPracticeToken(lesson.token))
+
+  for (const lesson of lessons) {
     const option = document.createElement('option')
     option.value = lesson.token
     option.textContent = lesson.label
@@ -1303,15 +1972,21 @@ function fillPracticeLessons() {
     els.learnerLessonSelect.append(learnerOption)
   }
 
+  if (!lessons.some((lesson) => lesson.token === state.practice.lesson.token)) {
+    state.practice.lesson = lessons[0] || PRACTICE_LESSONS[0]
+  }
+
   els.lessonSelect.value = state.practice.lesson.token
   els.learnerLessonSelect.value = state.practice.lesson.token
   els.lessonLabel.textContent = `Lesson ${state.practice.lesson.label}`
   els.learnerLessonTitle.textContent = `Lesson ${state.practice.lesson.label}`
+  updateDatasetText()
 }
 
 function selectPracticeLesson(token, playSample = true) {
+  const lessons = PRACTICE_LESSONS.filter((lesson) => isFirstPracticeToken(lesson.token))
   state.practice.lesson =
-    PRACTICE_LESSONS.find((lesson) => lesson.token === token) || PRACTICE_LESSONS[0]
+    lessons.find((lesson) => lesson.token === token) || lessons[0] || PRACTICE_LESSONS[0]
   els.lessonSelect.value = state.practice.lesson.token
   els.learnerLessonSelect.value = state.practice.lesson.token
   els.lessonLabel.textContent = `Lesson ${state.practice.lesson.label}`
@@ -1565,6 +2240,8 @@ els.curlRange.addEventListener('input', (event) => {
   updateCurlValue(degrees)
   applyRotationControlToChain()
   applyPoseOffsets()
+  refreshHandShapeControls()
+  refreshWristRotationControls()
 })
 
 els.autoToggle.addEventListener('change', (event) => {
@@ -1575,6 +2252,8 @@ els.chainToggle.addEventListener('change', (event) => {
   state.chain = event.target.checked
   applyRotationControlToChain()
   applyPoseOffsets()
+  refreshHandShapeControls()
+  refreshWristRotationControls()
 })
 
 els.helperToggle.addEventListener('change', (event) => {
@@ -1589,6 +2268,8 @@ els.poseButton.addEventListener('click', () => {
   els.autoToggle.checked = false
   applyRotationControlToChain()
   applyPoseOffsets()
+  refreshHandShapeControls()
+  refreshWristRotationControls()
 })
 
 els.resetButton.addEventListener('click', () => {
@@ -1604,6 +2285,7 @@ els.resetButton.addEventListener('click', () => {
   updateFaceControlsFromActive()
   applyPoseOffsets()
   refreshIkControls()
+  refreshHandShapeControls()
 })
 
 els.faceSelect.addEventListener('change', (event) => {
@@ -1632,13 +2314,57 @@ els.transitionRange.addEventListener('input', (event) => {
   updateTransitionValue(event.target.value)
 })
 
-els.ikSideSelect.addEventListener('change', (event) => {
+els.handSideSelect.addEventListener('change', (event) => {
+  state.activeHandSide = event.target.value
   state.activeIkSide = event.target.value
+  refreshHandShapeControls()
   refreshIkControls()
+  selectPrimaryFingerBone()
 })
 
-;[els.ikXRange, els.ikYRange, els.ikZRange].forEach((input) => {
+els.fingerSelect.addEventListener('change', (event) => {
+  state.activeFinger = event.target.value
+  refreshHandShapeControls()
+  selectPrimaryFingerBone()
+})
+
+;[els.fingerCurlRange, els.fingerSpreadRange, els.fingerTwistRange].forEach((input) => {
+  input.addEventListener('input', applyFingerShapeFromControls)
+})
+
+;[els.fingerBaseRange, els.fingerMiddleRange, els.fingerTipRange].forEach((input) => {
+  input.addEventListener('input', applyFingerJointFromControls)
+})
+
+els.handPresetButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    applyHandPreset(button.dataset.handPreset)
+  })
+})
+
+els.resetFingerButton.addEventListener('click', resetFingerShape)
+els.resetHandButton.addEventListener('click', () => resetHandShape())
+
+els.ikSideSelect.addEventListener('change', (event) => {
+  state.activeIkSide = event.target.value
+  state.activeHandSide = event.target.value
+  refreshIkControls()
+  refreshHandShapeControls()
+})
+
+;[
+  els.ikXRange,
+  els.ikYRange,
+  els.ikZRange,
+  els.ikPoleXRange,
+  els.ikPoleYRange,
+  els.ikPoleZRange,
+].forEach((input) => {
   input.addEventListener('input', applyIkTargetFromControls)
+})
+
+;[els.wristPitchRange, els.wristYawRange, els.wristRollRange].forEach((input) => {
+  input.addEventListener('input', applyWristRotationFromControls)
 })
 
 els.captureWristButton.addEventListener('click', () => {
@@ -1775,6 +2501,7 @@ refreshSavedPoseSelect()
 setupSpeechRecognition()
 fillPracticeLessons()
 updatePerformanceText()
-setMode('lab')
+updateDatasetText()
+setMode('learner')
 loadSampleVrmAvatar()
 requestAnimationFrame(animate)
