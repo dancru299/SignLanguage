@@ -59,6 +59,8 @@ import {
   scorePractice,
 } from './practiceScoring.js'
 import { prepareVrmForSignLab } from './vrmRig.js'
+import { initRemoteCameraPC, cleanupPCReceiver } from './remoteCamera.js'
+import { loadSignAnimation } from './animationCache.js'
 
 const DEFAULT_VRM_AVATAR = {
   url: '/models/AvatarSample_C.vrm',
@@ -218,6 +220,9 @@ const state = {
     lastHandedness: '',
     lesson: PRACTICE_LESSONS[2],
     score: 0,
+    cameraSource: 'local',
+    remoteStream: null,
+    remoteConnected: false,
   },
   performance: {
     renderFrames: 0,
@@ -594,6 +599,29 @@ document.querySelector('#app').innerHTML = `
           <select id="lessonSelect"></select>
         </div>
 
+        <div class="control-row">
+          <label class="field-label">Camera Source</label>
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text); transition: all 0.2s;">
+              <input type="radio" name="cameraSource" value="local" checked style="margin: 0;" />
+              <span>Webcam</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text); transition: all 0.2s;">
+              <input type="radio" name="cameraSource" value="remote" style="margin: 0;" />
+              <span>Phone 60fps</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="remoteCamPanel" style="display: none; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(0,0,0,0.02);" class="control-row">
+          <label class="field-label" style="margin-bottom: 6px; color: #16846f; font-weight: bold;">Pair Phone Camera</label>
+          <div id="remoteCamStatus" style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4;">Connecting to local signaling server...</div>
+          <div id="pairingQrContainer" style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+            <img id="pairingQrImg" style="width: 140px; height: 140px; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 4px;" alt="QR Code" />
+            <a id="pairingLink" href="#" target="_blank" style="font-size: 11px; color: #16846f; text-decoration: underline; text-align: center; word-break: break-all;">Open pairing link</a>
+          </div>
+        </div>
+
         <div class="button-pair">
           <button id="startPracticeButton" type="button">Start camera</button>
           <button id="stopPracticeButton" type="button">Stop</button>
@@ -616,10 +644,24 @@ document.querySelector('#app').innerHTML = `
             <h2>Practice</h2>
             <strong id="learnerLessonTitle">Lesson C</strong>
           </div>
-          <div class="learner-actions">
+          <div class="learner-actions" style="display: flex; gap: 8px; align-items: center;">
             <select id="learnerLessonSelect" aria-label="Learner lesson"></select>
+            <select id="learnerCamSource" aria-label="Camera Source" style="height: 36px; padding: 0 8px; font-size: 13px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg-card); color: var(--text); cursor: pointer;">
+              <option value="local">Local WebCam</option>
+              <option value="remote">Phone 60fps</option>
+            </select>
             <button id="learnerStartButton" type="button">Start</button>
             <button id="learnerStopButton" type="button">Stop</button>
+          </div>
+        </div>
+        <div id="learnerRemoteCamPanel" style="display: none; padding: 12px; margin-top: 10px; border: 1px dashed #16846f; border-radius: var(--radius); background: var(--bg-card); align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+          <div style="flex: 1;">
+            <strong style="color: #16846f; font-size: 13px; display: block; margin-bottom: 2px;">Phone 60fps Mode</strong>
+            <span id="learnerRemoteCamStatus" style="font-size: 11px; color: var(--text-muted);">Waiting for connection...</span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <img id="learnerPairingQrImg" style="width: 54px; height: 54px; border: 1px solid var(--line); border-radius: 4px;" alt="QR" />
+            <a id="learnerPairingLink" href="#" target="_blank" style="font-size: 11px; color: #16846f; font-weight: bold; text-decoration: underline;">Pair Link</a>
           </div>
         </div>
         <div class="learner-progress" aria-label="Learner progress">
@@ -754,6 +796,16 @@ const els = {
   subtitleText: document.querySelector('#subtitleText'),
   debugLog: document.querySelector('#debugLog'),
   sourceBadge: document.querySelector('#sourceBadge'),
+  cameraSourceInputs: document.querySelectorAll('input[name="cameraSource"]'),
+  remoteCamPanel: document.querySelector('#remoteCamPanel'),
+  remoteCamStatus: document.querySelector('#remoteCamStatus'),
+  pairingQrImg: document.querySelector('#pairingQrImg'),
+  pairingLink: document.querySelector('#pairingLink'),
+  learnerCamSource: document.querySelector('#learnerCamSource'),
+  learnerRemoteCamPanel: document.querySelector('#learnerRemoteCamPanel'),
+  learnerRemoteCamStatus: document.querySelector('#learnerRemoteCamStatus'),
+  learnerPairingQrImg: document.querySelector('#learnerPairingQrImg'),
+  learnerPairingLink: document.querySelector('#learnerPairingLink'),
 }
 
 const scene = new THREE.Scene()
@@ -1841,6 +1893,14 @@ function stopPlayback(message = 'Queue stopped') {
   state.playback.missing = []
   setSubtitle('Ready')
 
+  if (state.playback.currentAction) {
+    state.playback.currentAction.fadeOut(0.2)
+    state.playback.currentAction = null
+  }
+  if (state.playback.mixer) {
+    state.playback.mixer.stopAllAction()
+  }
+
   if (els.queueStatus) {
     setQueueStatus(message)
   }
@@ -1869,7 +1929,7 @@ function buildQueueFromText(text) {
   return { tokens, queue, missing }
 }
 
-function playNextQueuedPose(time = performance.now()) {
+async function playNextQueuedPose(time = performance.now()) {
   if (!state.playback.playing) return
 
   if (state.playback.index >= state.playback.queue.length) {
@@ -1882,10 +1942,52 @@ function playNextQueuedPose(time = performance.now()) {
 
   const item = state.playback.queue[state.playback.index]
   state.playback.index += 1
-  state.playback.waitUntil = time + state.transitionMs + state.playback.holdMs
   setSubtitle(item.label)
   setQueueStatus(`Playing ${state.playback.index}/${state.playback.queue.length}: ${item.label}`)
-  transitionToPose(item.pose)
+
+  // 1. Try loading 60 FPS GLB animation from local cache/CDN
+  let animData = null
+  try {
+    animData = await loadSignAnimation(item.token)
+  } catch (err) {
+    console.warn(`[Queue Player] Error fetching animation for ${item.token}:`, err)
+  }
+
+  if (animData && animData.animations && animData.animations.length > 0) {
+    // Disable procedural transitions
+    state.transition = null
+
+    if (!state.playback.mixer) {
+      state.playback.mixer = new THREE.AnimationMixer(state.model)
+    }
+
+    const clip = animData.animations[0]
+    const action = state.playback.mixer.clipAction(clip)
+
+    action.reset()
+    action.setLoop(THREE.LoopOnce)
+    action.clampWhenFinished = true
+
+    if (state.playback.currentAction) {
+      action.crossFadeFrom(state.playback.currentAction, 0.2, true)
+    } else {
+      action.fadeIn(0.2)
+    }
+
+    action.play()
+    state.playback.currentAction = action
+
+    state.playback.waitUntil = performance.now() + (clip.duration * 1000) + state.playback.holdMs
+  } else {
+    // 2. Procedural Fallback
+    if (state.playback.currentAction) {
+      state.playback.currentAction.fadeOut(0.25)
+      state.playback.currentAction = null
+    }
+
+    state.playback.waitUntil = performance.now() + state.transitionMs + state.playback.holdMs
+    transitionToPose(item.pose)
+  }
 }
 
 function playTextAsSigns(text) {
@@ -1911,8 +2013,16 @@ function playTextAsSigns(text) {
 }
 
 function updatePlayback(time, isTransitioning) {
-  if (!state.playback.playing || isTransitioning || time < state.playback.waitUntil) {
-    return
+  // If we are playing a GLB animation (has currentAction), we check against waitUntil
+  // Procedural pose check also includes isTransitioning
+  const usingGLB = !!state.playback.currentAction
+  const isTimeReady = performance.now() >= state.playback.waitUntil
+
+  if (!state.playback.playing) return
+  if (usingGLB) {
+    if (!isTimeReady) return
+  } else {
+    if (isTransitioning || !isTimeReady) return
   }
 
   playNextQueuedPose(time)
@@ -2000,27 +2110,62 @@ function selectPracticeLesson(token, playSample = true) {
   }
 }
 
+let mpWorker = null
+let workerReady = false
+let workerLoading = false
+
 async function loadHandLandmarker() {
-  if (state.practice.handLandmarker) return state.practice.handLandmarker
+  if (workerReady) return true
+  if (workerLoading) {
+    return new Promise((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (workerReady) {
+          clearInterval(checkInterval)
+          resolve(true)
+        }
+      }, 100)
+    })
+  }
 
-  setPracticeStatus('Loading MediaPipe...')
-  const vision = await FilesetResolver.forVisionTasks(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
-  )
+  workerLoading = true
+  setPracticeStatus('Loading MediaPipe Worker...')
 
-  state.practice.handLandmarker = await HandLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-      delegate: 'GPU',
-    },
-    runningMode: 'VIDEO',
-    numHands: 2,
-    minHandDetectionConfidence: 0.5,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+  try {
+    mpWorker = new Worker('/mediapipe.worker.js')
+    mpWorker.onerror = (err) => {
+      workerLoading = false
+      setPracticeStatus(`Worker loading error: ${err.message || 'Script compile or network error'}`)
+      console.error('[Worker Error Event]:', err)
+    }
+    mpWorker.postMessage({ type: 'init' })
+  } catch (err) {
+    workerLoading = false
+    setPracticeStatus(`Worker load failed: ${err.message || err}`)
+    throw err
+  }
+
+  return new Promise((resolve, reject) => {
+    mpWorker.onmessage = (event) => {
+      const { type, status, result, error } = event.data
+
+      if (type === 'status') {
+        if (status === 'ready') {
+          workerReady = true
+          workerLoading = false
+          setPracticeStatus('Worker ready')
+          resolve(true)
+        } else if (status === 'error') {
+          workerLoading = false
+          setPracticeStatus(`Worker error: ${error}`)
+          reject(new Error(error))
+        }
+      } else if (type === 'result') {
+        evaluatePracticeFrame(result)
+      } else if (type === 'error') {
+        console.error('[MediaPipe Worker]:', error)
+      }
+    }
   })
-
-  return state.practice.handLandmarker
 }
 
 function drawLandmarks(landmarks) {
@@ -2087,7 +2232,7 @@ function evaluatePracticeFrame(result) {
   }
 }
 
-function practiceLoop() {
+async function practiceLoop() {
   if (!state.practice.running) return
 
   const video = els.practiceVideo
@@ -2096,16 +2241,31 @@ function practiceLoop() {
 
   if (
     canDetect &&
-    state.practice.handLandmarker &&
+    workerReady &&
+    mpWorker &&
     video.readyState >= 2 &&
     video.currentTime !== state.practice.lastVideoTime
   ) {
-    const result = state.practice.handLandmarker.detectForVideo(video, now)
-    evaluatePracticeFrame(result)
     state.practice.lastVideoTime = video.currentTime
     state.practice.lastDetectAt = now
     state.practice.detectedFrames += 1
-  } else if (state.practice.handLandmarker && video.readyState >= 2) {
+
+    try {
+      // Capture frame as ImageBitmap
+      const imageBitmap = await createImageBitmap(video)
+      // Transfer the ImageBitmap to the worker without memory cloning
+      mpWorker.postMessage(
+        {
+          type: 'detect',
+          imageBitmap,
+          timestamp: now,
+        },
+        [imageBitmap]
+      )
+    } catch (err) {
+      console.warn('[practiceLoop] Frame capture failed:', err)
+    }
+  } else if (workerReady && video.readyState >= 2) {
     state.practice.skippedFrames += 1
   }
 
@@ -2123,6 +2283,32 @@ function practiceLoop() {
 async function startPracticeCamera() {
   try {
     await loadHandLandmarker()
+
+    if (state.practice.cameraSource === 'remote') {
+      if (state.practice.remoteStream) {
+        els.practiceVideo.srcObject = state.practice.remoteStream
+        await els.practiceVideo.play()
+        state.practice.running = true
+        state.practice.lastVideoTime = -1
+        state.practice.lastDetectAt = 0
+        state.practice.lastFpsAt = performance.now()
+        state.practice.detectedFrames = 0
+        state.practice.skippedFrames = 0
+        state.practice.measuredFps = 0
+        els.practiceCamera.classList.add('is-active')
+        setPracticeStatus('Phone stream running')
+        updatePerformanceText()
+        practiceLoop()
+      } else {
+        // Start signaling connection if not active
+        initializeRemoteCameraSession()
+        state.practice.running = true
+        els.practiceCamera.classList.add('is-active')
+        setPracticeStatus('Waiting for phone connection...')
+      }
+      return
+    }
+
     state.practice.stream = await navigator.mediaDevices.getUserMedia({
       video: {
         width: { ideal: 640 },
@@ -2153,9 +2339,11 @@ async function startPracticeCamera() {
 function stopPracticeCamera() {
   state.practice.running = false
 
-  if (state.practice.stream) {
-    state.practice.stream.getTracks().forEach((track) => track.stop())
-    state.practice.stream = null
+  if (state.practice.cameraSource === 'local') {
+    if (state.practice.stream) {
+      state.practice.stream.getTracks().forEach((track) => track.stop())
+      state.practice.stream = null
+    }
   }
 
   els.practiceVideo.srcObject = null
@@ -2461,6 +2649,120 @@ els.stopPracticeButton.addEventListener('click', stopPracticeCamera)
 els.learnerStartButton.addEventListener('click', startPracticeCamera)
 els.learnerStopButton.addEventListener('click', stopPracticeCamera)
 
+function initializeRemoteCameraSession() {
+  initRemoteCameraPC(
+    (stream) => {
+      state.practice.remoteStream = stream
+      state.practice.remoteConnected = true
+      
+      if (state.practice.running) {
+        els.practiceVideo.srcObject = stream
+        els.practiceVideo.play().then(() => {
+          setPracticeStatus('Phone stream active')
+        }).catch((err) => {
+          console.error('[WebRTC] Remote video playback error:', err)
+        })
+      }
+    },
+    (status, data) => {
+      const statusTextMap = {
+        'ready': 'Waiting for phone connection...',
+        'connecting': 'Connecting to phone...',
+        'connected': 'Connected (60 FPS Stream)',
+        'disconnected': 'Phone disconnected. Waiting...',
+        'error': `WebRTC Error: ${data?.error || ''}`
+      }
+      
+      const message = statusTextMap[status] || status
+      
+      if (els.remoteCamStatus) els.remoteCamStatus.textContent = message
+      if (els.learnerRemoteCamStatus) els.learnerRemoteCamStatus.textContent = message
+      
+      if (status === 'ready' && data) {
+        if (els.pairingQrImg) els.pairingQrImg.src = data.qrUrl
+        if (els.pairingLink) {
+          els.pairingLink.href = data.pairUrl
+          els.pairingLink.textContent = 'Open pairing link'
+        }
+        if (els.learnerPairingQrImg) els.learnerPairingQrImg.src = data.qrUrl
+        if (els.learnerPairingLink) els.learnerPairingLink.href = data.pairUrl
+      }
+      
+      if (status === 'connected') {
+        if (els.remoteCamStatus) els.remoteCamStatus.style.color = '#16846f'
+        if (els.learnerRemoteCamStatus) els.learnerRemoteCamStatus.style.color = '#16846f'
+      } else {
+        if (els.remoteCamStatus) els.remoteCamStatus.style.color = ''
+        if (els.learnerRemoteCamStatus) els.learnerRemoteCamStatus.style.color = ''
+      }
+      
+      if (status === 'disconnected') {
+        state.practice.remoteStream = null
+        state.practice.remoteConnected = false
+        if (state.practice.running) {
+          els.practiceVideo.srcObject = null
+          setPracticeStatus('Stream disconnected')
+        }
+      }
+    }
+  )
+}
+
+function handleCameraSourceChange(value) {
+  state.practice.cameraSource = value
+
+  if (value === 'remote') {
+    if (els.remoteCamPanel) els.remoteCamPanel.style.display = 'block'
+    if (els.learnerRemoteCamPanel) els.learnerRemoteCamPanel.style.display = 'flex'
+    
+    if (state.practice.stream) {
+      state.practice.stream.getTracks().forEach((track) => track.stop())
+      state.practice.stream = null
+    }
+    
+    initializeRemoteCameraSession()
+
+    if (state.practice.running) {
+      if (state.practice.remoteStream) {
+        els.practiceVideo.srcObject = state.practice.remoteStream
+        els.practiceVideo.play()
+      } else {
+        els.practiceVideo.srcObject = null
+        setPracticeStatus('Waiting for phone connection...')
+      }
+    }
+  } else {
+    if (els.remoteCamPanel) els.remoteCamPanel.style.display = 'none'
+    if (els.learnerRemoteCamPanel) els.learnerRemoteCamPanel.style.display = 'none'
+    
+    cleanupPCReceiver()
+    state.practice.remoteStream = null
+    state.practice.remoteConnected = false
+
+    if (state.practice.running) {
+      startPracticeCamera()
+    }
+  }
+}
+
+els.cameraSourceInputs.forEach((input) => {
+  input.addEventListener('change', (event) => {
+    const val = event.target.value
+    if (els.learnerCamSource) els.learnerCamSource.value = val
+    handleCameraSourceChange(val)
+  })
+})
+
+if (els.learnerCamSource) {
+  els.learnerCamSource.addEventListener('change', (event) => {
+    const val = event.target.value
+    els.cameraSourceInputs.forEach((input) => {
+      if (input.value === val) input.checked = true
+    })
+    handleCameraSourceChange(val)
+  })
+}
+
 function animate(time) {
   requestAnimationFrame(animate)
 
@@ -2488,6 +2790,9 @@ function animate(time) {
   }
 
   controls.update()
+  if (state.playback.mixer) {
+    state.playback.mixer.update(delta)
+  }
   if (state.vrm) {
     state.vrm.update(delta)
   }

@@ -1,0 +1,43 @@
+nâng cấp dự án từ MVP lên bản thương mại (production-ready)
+
+Để dự án chạy mượt mà trên môi trường Web thương mại (yêu cầu tốc độ tải trang nhanh, không giật lag ngay cả trên mobile)
+:Về dữ liệu: Chốt 350 từ vựng giao tiếp thiết yếu.
+Về kỹ thuật Animation: Kết hợp giữa Cách 1 và Cách 2:Sử dụng định dạng GLTF/GLB để lưu trữ animation vì cấu trúc của nó 
+đã được tối ưu hóa cho Web (sử dụng ArrayBuffers truyền thẳng vào GPU).Xây dựng một Studio Tool nội bộ 
+nhỏ: Dùng MediaPipe ghi lại chuyển động tay của một chuyên gia VSL $\rightarrow$ mapping vào model VRM trong
+ Three.js $\rightarrow$ Xuất (Export) chuỗi keyframe đó thành định dạng nhị phân GLTF.Khi phân phối đến client, 
+ áp dụng Lazy Loading (học đến đâu tải đến đấy) hoặc lưu trữ các file animation này vào IndexedDB ở trình duyệt 
+ của người dùng sau lần tải đầu tiên để những lần học sau mở lên là chạy ngay lập tức, không phụ thuộc vào tốc độ mạng.
+ Bạn thấy hướng tiếp cận kết hợp tool Mo-cap từ MediaPipe để build thư viện GLTF này có phù hợp với nguồn lực không?
+
+ . Yêu cầu về Thiết bị & Nền tảng (Target Platform) thì hiện sản phẩm tôi muốn tối ưu chạy mượt trên cả các thiết bị di động cấu hình thấp, hiện tại tôi muốn tiếp tục phát
+ triển trên nền tảng web, và sẽ tích hợp các nền tảng khác như desktop app, mobile app sau.
+ 
+ 3. Mức độ phức tạp của Mô hình AI (Tracking Scope)
+ Có tôi muốn theo dõi 2 tay, cơ thể và cả khu vực đầu, mặt để biểu cảm khuôn mặt nữa, nhưng quan trọng là phải xử lý nhanh, không giật lag.
+
+ 4. Tính năng AI Dịch thuật (NLP/LLM Translation)
+ 💡 Giải pháp "Lai" (Hybrid) - Kiến trúc hoàn hảo cho Production
+Để tối ưu nhất cho hệ thống SignLanguage 3D Lab, bạn nên xây dựng một kiến trúc Hybrid theo các bước sau để vừa đảm bảo tốc độ, vừa đảm bảo tính chính xác ngữ pháp:
+
+[Người dùng nhập câu] 
+         │
+         ▼
+[Kiểm tra Cache / Database câu mẫu thông dụng] ──(Có)──► [Phát Animation ngay]
+         │
+       (Không)
+         ▼
+[Gọi LLM API (GPT-4o-mini / PhoGPT)] ──► [Trả về chuỗi Gloss VSL]
+         │
+         ▼
+[Three.js Loader] ──► [Nối các Animation Clip với nhau]
+Bước 1 - Cache/Hard-code cho 300-500 từ và câu cơ bản: Với các câu giao tiếp thông dụng (ví dụ: "Bạn tên là gì?", "Cảm ơn bạn"), bạn hãy dịch sẵn chuẩn ngữ pháp VSL và lưu trong DB. Khi người dùng nhập đúng câu đó, hệ thống gọi ngay animation, không cần qua AI để tiết kiệm tài nguyên.
+
+Bước 2 - LLM cho các câu linh hoạt: Khi người dùng nhập một câu tự do, hệ thống mới gửi câu đó qua một LLM (đã được cấu hình prompt chuẩn dịch thuật VSL) để lấy về chuỗi từ khóa đã đảo ngữ pháp.
+
+Cách tiếp cận Hybrid này vừa giúp dự án của bạn mang tính chất "Tech-driven" (có yếu tố AI thực sự thông minh), vừa đảm bảo sản phẩm chạy mượt mà, chính xác và tối ưu chi phí vận hành ở bản thương mại.
+Tôi muốn muốn tận dụng API của các ông lớn để đi nhanh hơn trong giai đoạn thương mại hóa này nếu nó free
+
+5. Tính năng phía người dùng & Hệ thống (Platform Features)
+Về lưu trữ và tiến trình học thì sẽ có phần quản lý tài khoản người dùng, và lưu lịch sử học, tiến trình học của người dùng.
+Công cụ Pose Lab thì tôi muốn mở ra cho các chuyên gia ngôn ngữ ký hiệu trong cộng đồng cùng tham gia đóng góp và và ai có quyền, được tôi cấp quyền sẽ được kiểm duyệt dữ liệu tư thế, cho dữ liệu đó vào kho dữ liệu
